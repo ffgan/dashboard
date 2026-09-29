@@ -11,6 +11,12 @@ import { sortBy } from '@shell/utils/sort';
 import { exceptionToErrorsArray } from '@shell/utils/error';
 import { NAMESPACE } from '@shell/config/types';
 import { NAME as NAME_COL, TYPE, NAMESPACE as NAMESPACE_COL, AGE } from '@shell/config/table-headers';
+import {
+  isNotFoundError,
+  resourceIdentity,
+  resourcesFromYaml,
+  resourceType
+} from '@shell/utils/import-yaml';
 
 export default {
   emits: ['close', 'onReadyYamlEditor'],
@@ -50,6 +56,8 @@ export default {
       errors:            null,
       rows:              null,
       done:              false,
+      preflight:         null,
+      preflightYaml:     null,
       selectedNamespace: this.defaultNamespace,
     };
   },
@@ -76,6 +84,21 @@ export default {
         AGE
       ];
     },
+
+    showPreflightConfirmation() {
+      return this.preflightYaml === this.currentYaml &&
+        !!(this.preflight?.existing.length || this.preflight?.unchecked.length);
+    },
+  },
+
+  watch: {
+    currentYaml() {
+      this.resetPreflight();
+    },
+
+    selectedNamespace() {
+      this.resetPreflight();
+    },
   },
 
   methods: {
@@ -92,9 +115,82 @@ export default {
       }
     },
 
+    resetPreflight() {
+      this.preflight = null;
+      this.preflightYaml = null;
+    },
+
+    async preflightImport() {
+      const existing = [];
+      const unchecked = [];
+      const resources = resourcesFromYaml(this.currentYaml);
+
+      await Promise.all(resources.map(async(resource) => {
+        const type = resourceType(resource);
+        const schema = type ? this.$store.getters['cluster/schemaFor'](type, false, false) : null;
+        const identity = resourceIdentity(resource, schema, this.selectedNamespace);
+
+        if (!identity) {
+          return;
+        }
+
+        if (!schema || (schema.attributes?.namespaced && !identity.namespace)) {
+          unchecked.push(identity);
+
+          return;
+        }
+
+        try {
+          const found = await this.$store.dispatch('cluster/find', {
+            type,
+            id:  identity.id,
+            opt: {
+              force:     true,
+              transient: true,
+              watch:     false,
+            },
+          });
+
+          if (found) {
+            existing.push(identity);
+          }
+        } catch (err) {
+          if (!isNotFoundError(err)) {
+            unchecked.push(identity);
+          }
+        }
+      }));
+
+      const byIdentity = (a, b) => `${ a.type }/${ a.id }`.localeCompare(`${ b.type }/${ b.id }`);
+      const unique = (resources) => [
+        ...new Map(resources.map((resource) => [`${ resource.type }/${ resource.id }`, resource])).values()
+      ];
+
+      return {
+        existing:  unique(existing).sort(byIdentity),
+        unchecked: unique(unchecked).sort(byIdentity),
+      };
+    },
+
+    resourceLabel(resource) {
+      return resource.namespace ? `${ resource.namespace }/${ resource.name }` : resource.name;
+    },
+
     async importYaml(btnCb) {
       try {
         this.errors = [];
+
+        if (!this.showPreflightConfirmation) {
+          const preflight = await this.preflightImport();
+
+          if (preflight.existing.length || preflight.unchecked.length) {
+            this.preflight = preflight;
+            this.preflightYaml = this.currentYaml;
+            btnCb('cancelled');
+
+            return;
+          }
+        }
 
         const res = await this.currentCluster.doAction('apply', {
           yaml:             this.currentYaml,
@@ -105,9 +201,11 @@ export default {
 
         this.rows = res;
         this.done = true;
+        this.resetPreflight();
       } catch (err) {
         this.errors = exceptionToErrorsArray(err);
         this.done = false;
+        this.resetPreflight();
         btnCb(false);
       }
     },
@@ -186,6 +284,44 @@ export default {
         @onReady="onReadyYamlEditor"
       />
       <Banner
+        v-if="showPreflightConfirmation"
+        color="warning"
+        role="status"
+        data-testid="import-yaml-update-warning"
+      >
+        <div class="preflight-warning">
+          <p v-if="preflight.existing.length">
+            {{ t('import.confirmation.existing', {count: preflight.existing.length}) }}
+          </p>
+          <ul
+            v-if="preflight.existing.length"
+            data-testid="import-yaml-existing-resources"
+          >
+            <li
+              v-for="resource in preflight.existing"
+              :key="`${resource.type}/${resource.id}`"
+            >
+              <code>{{ resource.kind }} {{ resourceLabel(resource) }}</code>
+            </li>
+          </ul>
+          <p v-if="preflight.unchecked.length">
+            {{ t('import.confirmation.unchecked', {count: preflight.unchecked.length}) }}
+          </p>
+          <ul
+            v-if="preflight.unchecked.length"
+            data-testid="import-yaml-unchecked-resources"
+          >
+            <li
+              v-for="resource in preflight.unchecked"
+              :key="`${resource.type}/${resource.id}`"
+            >
+              <code>{{ resource.kind }} {{ resourceLabel(resource) }}</code>
+            </li>
+          </ul>
+          <p>{{ t('import.confirmation.prompt') }}</p>
+        </div>
+      </Banner>
+      <Banner
         v-for="(err, i) in errors"
         :key="i"
         color="error"
@@ -229,8 +365,9 @@ export default {
           v-if="!done"
           mode="import"
           :disabled="!currentYaml.length"
+          :action-label="showPreflightConfirmation ? t('import.confirmation.action') : null"
           data-testid="import-yaml-import-action"
-          :aria-label="t('import.title')"
+          :aria-label="showPreflightConfirmation ? t('import.confirmation.action') : t('import.title')"
           @click="importYaml"
         />
       </div>
@@ -258,6 +395,14 @@ export default {
         min-height: $min;
         max-height: $max;
       }
+    }
+  }
+
+  .preflight-warning {
+    width: 100%;
+
+    p:last-child {
+      margin-bottom: 0;
     }
   }
 </style>

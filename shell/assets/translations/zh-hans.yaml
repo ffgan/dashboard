@@ -2439,6 +2439,19 @@ import:
   title: 导入 YAML
   defaultNamespace:
     label: 默认命名空间
+  confirmation:
+    existing: |-
+      {count, plural,
+      =1 {将更新以下现有资源：}
+      other {将更新以下 # 个现有资源：}
+      }
+    unchecked: |-
+      {count, plural,
+      =1 {无法检查 1 个资源的当前状态。}
+      other {无法检查 # 个资源的当前状态。}
+      }
+    prompt: 请检查以上资源，然后确认是否继续导入。
+    action: 确认导入
   success: |-
     已应用 {count, plural,
     =1 {1个资源}

@@ -4017,6 +4017,19 @@ import:
     label: YAML Editor
   defaultNamespace:
     label: Default Namespace
+  confirmation:
+    existing: |-
+      {count, plural,
+      =1 {The following existing resource will be updated:}
+      other {The following # existing resources will be updated:}
+      }
+    unchecked: |-
+      {count, plural,
+      =1 {The current state of 1 resource could not be checked.}
+      other {The current state of # resources could not be checked.}
+      }
+    prompt: Review the resources above, then confirm to continue with the import.
+    action: Confirm Import
   success: |-
     Applied {count, plural,
     =1 {1 Resource}
